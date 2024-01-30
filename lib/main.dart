@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(MojBudzetDomowyApp());
 
@@ -24,10 +26,17 @@ class StronaGlowna extends StatefulWidget {
 }
 
 class _StronaGlownaState extends State<StronaGlowna> {
-  final List<Transakcja> _transakcje = [];
+  List<Transakcja> _transakcje = [];
   double _sumaWydanychPieniedzy = 0.0;
 
-  void _dodajNowaTransakcje(String tytulTx, double kwotaTx, String kategoriaTx) {
+  @override
+  void initState() {
+    super.initState();
+    _wczytajTransakcje();
+  }
+
+  void _dodajNowaTransakcje(
+      String tytulTx, double kwotaTx, String kategoriaTx) {
     final nowaTx = Transakcja(
       id: DateTime.now().toString(),
       tytul: tytulTx,
@@ -40,9 +49,36 @@ class _StronaGlownaState extends State<StronaGlowna> {
       _transakcje.add(nowaTx);
       _sumaWydanychPieniedzy += kwotaTx;
     });
+    _zapiszTransakcje();
 
-    // Nawiguj do trasy '/historia'
     Navigator.pushNamed(context, '/historia');
+  }
+
+  void _zapiszTransakcje() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String transakcjeJson =
+        jsonEncode(_transakcje.map((tx) => tx.toJson()).toList());
+    await prefs.setString('transakcje', transakcjeJson);
+  }
+
+  void _wczytajTransakcje() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? transakcjeJson = prefs.getString('transakcje');
+    if (transakcjeJson != null) {
+      final List<dynamic> transakcjeList = jsonDecode(transakcjeJson);
+      setState(() {
+        _transakcje =
+            transakcjeList.map((tx) => Transakcja.fromJson(tx)).toList();
+      });
+    }
+    _aktualizujSumeWydanychPieniedzy();
+  }
+
+  void _aktualizujSumeWydanychPieniedzy() {
+    setState(() {
+      _sumaWydanychPieniedzy =
+          _transakcje.fold(0.0, (sum, item) => sum + item.kwota);
+    });
   }
 
   void _rozpocznijDodawanieNowejTransakcji(BuildContext ctx) {
@@ -94,63 +130,40 @@ class _StronaGlownaState extends State<StronaGlowna> {
                       ),
                     ),
                   ),
-                  Text('Suma wydanych pieniędzy: \$${_sumaWydanychPieniedzy.toStringAsFixed(2)}'),
+                  Text(
+                      'Suma wydanych pieniędzy: \$${_sumaWydanychPieniedzy.toStringAsFixed(2)}'),
                 ],
               ),
               elevation: 5,
             ),
           ),
-          Column(
-            children: _transakcje.map((tx) {
-              return Card(
-                child: Row(
-                  children: <Widget>[
-                    Container(
-                      margin: EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 15,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: Colors.purple,
-                          width: 2,
-                        ),
-                      ),
-                      padding: EdgeInsets.all(10),
-                      child: Text(
-                        '\$${tx.kwota.toStringAsFixed(2)}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                          color: Colors.purple,
+          Expanded(
+            child: ListView.builder(
+              itemCount: _transakcje.length,
+              itemBuilder: (ctx, index) {
+                return Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      radius: 30,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: FittedBox(
+                          child: Text(
+                              '\$${_transakcje[index].kwota.toStringAsFixed(2)}'),
                         ),
                       ),
                     ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          tx.tytul,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        Text(
-                          DateFormat('yyyy-MM-dd').format(tx.data),
-                          style: TextStyle(
-                            color: Colors.grey,
-                          ),
-                        ),
-                        Text(
-                          'Kategoria: ${tx.kategoria}',
-                          style: TextStyle(
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
+                    title: Text(
+                      _transakcje[index].tytul,
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  ],
-                ),
-              );
-            }).toList(),
+                    subtitle: Text(
+                      DateFormat('yyyy-MM-dd').format(_transakcje[index].data),
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -164,12 +177,13 @@ class _StronaGlownaState extends State<StronaGlowna> {
 
   List<PieChartSectionData> _getChartData() {
     Map<String, double> kategorieSumy = {};
-
     _transakcje.forEach((tx) {
+      double kwota = tx.kwota;
       if (kategorieSumy.containsKey(tx.kategoria)) {
-        kategorieSumy[tx.kategoria] = kategorieSumy[tx.kategoria]! + tx.kwota;
+        kategorieSumy[tx.kategoria] =
+            (kategorieSumy[tx.kategoria] ?? 0) + kwota;
       } else {
-        kategorieSumy[tx.kategoria] = tx.kwota;
+        kategorieSumy[tx.kategoria] = kwota;
       }
     });
 
@@ -178,18 +192,22 @@ class _StronaGlownaState extends State<StronaGlowna> {
       final double fontSize = isTouched ? 16 : 12;
 
       return PieChartSectionData(
-        color: Colors.primaries[kategorieSumy.keys.toList().indexOf(entry.key) % Colors.primaries.length],
+        color: Colors.primaries[kategorieSumy.keys.toList().indexOf(entry.key) %
+            Colors.primaries.length],
         value: entry.value,
         title: '\$${entry.value.toStringAsFixed(2)}',
         radius: isTouched ? 60 : 50,
-        titleStyle: TextStyle(fontSize: fontSize, fontWeight: FontWeight.bold, color: const Color(0xffffffff)),
+        titleStyle: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+            color: const Color(0xffffffff)),
       );
     }).toList();
   }
 }
 
 class NowaTransakcja extends StatefulWidget {
-  final Function dodajTx;
+  final Function(String, double, String) dodajTx;
 
   NowaTransakcja(this.dodajTx);
 
@@ -204,10 +222,12 @@ class _NowaTransakcjaState extends State<NowaTransakcja> {
 
   void _zatwierdzDane() {
     final wprowadzonyTytul = tytulController.text;
-    final wprowadzonaKwota = double.parse(kwotaController.text);
+    final wprowadzonaKwota = double.tryParse(kwotaController.text) ?? 0;
     final wprowadzonaKategoria = kategoriaController.text;
 
-    if (wprowadzonyTytul.isEmpty || wprowadzonaKwota <= 0 || wprowadzonaKategoria.isEmpty) {
+    if (wprowadzonyTytul.isEmpty ||
+        wprowadzonaKwota <= 0 ||
+        wprowadzonaKategoria.isEmpty) {
       return;
     }
 
@@ -287,4 +307,20 @@ class Transakcja {
     required this.data,
     required this.kategoria,
   });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'tytul': tytul,
+        'kwota': kwota,
+        'data': data.toIso8601String(),
+        'kategoria': kategoria,
+      };
+
+  static Transakcja fromJson(Map<String, dynamic> json) => Transakcja(
+        id: json['id'],
+        tytul: json['tytul'],
+        kwota: json['kwota'],
+        data: DateTime.parse(json['data']),
+        kategoria: json['kategoria'],
+      );
 }
